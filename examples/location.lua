@@ -6,20 +6,23 @@ vim.api.nvim_create_user_command('LocationForm', function()
       { name = 'latitude', label = '緯度', type = 'number', min = -90, max = 90, required = true },
       { name = 'description', label = '描述', required = true },
     },
-    on_submit = function(data)
+    on_submit = function(data, ctx)
       -- vim.print(data)
       -- Or persist with a synchronous function that raises/returns false on failure.
 
-      local path = vim.fn.stdpath('data') .. '/location.json'
+      if ctx.path == nil then
+        vim.notify("缺少保存的檔案名稱", vim.log.levels.ERROR)
+        return false
+      end
 
       local result = vim.fn.writefile({
         vim.json.encode(data),
-      }, path)
+      }, ctx.path)
 
       if result ~= 0 then
         return false, 'Failed to write file'
       else
-        print("✅ save to :" .. path)
+        print("✅ save to: " .. ctx.path)
       end
     end,
   })

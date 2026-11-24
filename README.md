@@ -1,18 +1,27 @@
 # form.nvim
 
-A small, dependency-free form UI for Neovim 0.12+. Native `vim.snippet` handles input; `:write` validates and submits. No snippet-completion hooks, private snippet APIs, LSP, or live validation.
+[English](README.md) | [繁體中文](README.zh_TW.md) | [Changelog](CHANGELOG.md)
+
+A dependency-free form UI for Neovim 0.12+. Native `vim.snippet` handles input; `:write` validates and submits. No snippet-completion hooks, private snippet APIs, LSP, or live validation.
 
 ## Install
 
-Extract `form.nvim.zip` into a native package directory. On a default macOS/Linux Neovim setup:
+Extract `form.nvim.zip` (or `form.nvim-unreleased.zip`) into a native package directory. On a default macOS/Linux Neovim setup:
 
 ```sh
 mkdir -p ~/.local/share/nvim/site/pack/local/start
-unzip form.nvim.zip -d ~/.local/share/nvim/site/pack/local/start
+unzip form.nvim-unreleased.zip -d ~/.local/share/nvim/site/pack/local/start
 ```
 
-Restart Neovim. If you use another data directory, check `:echo stdpath('data')`.
-For help tags, run `:helptags ~/.local/share/nvim/site/pack/local/start/form.nvim/doc`.
+For an existing installation, replace the old plugin directory with the new `form.nvim/` directory. Restart Neovim. If you use another data directory, check `:echo stdpath('data')`. Run `:helptags ~/.local/share/nvim/site/pack/local/start/form.nvim/doc` to enable `:help form.nvim`.
+
+Alternatively, add the plugin directory to `runtimepath` while developing it:
+
+```lua
+vim.opt.runtimepath:prepend('/path/to/form.nvim')
+```
+
+No `setup()` call is required.
 
 ## Quick start
 
@@ -25,26 +34,32 @@ vim.api.nvim_create_user_command('LocationForm', function()
       { name = 'latitude', label = '緯度', type = 'number', min = -90, max = 90, required = true },
       { name = 'description', label = '描述', required = true },
     },
-    on_submit = function(data)
-      vim.print(data)
-    end,
+    format = 'json',
   })
 end, {})
 ```
 
-Run `:LocationForm`. Tab and Shift-Tab move between the native snippet tabstops. Press Escape, then `:w` to validate and submit. Errors appear as native diagnostics (use `]d` / `[d` to move between them). Edit freely in Normal mode or Insert mode and write again.
+Run `:LocationForm`. Tab and Shift-Tab move between native snippet tabstops. Press Escape, then `:w ~/location.json` to validate and write the result to disk. Errors appear as native diagnostics (use `]d` / `[d` to move between them). Edit freely in Normal or Insert mode and write again.
+
+Example output (JSON key order is not guaranteed):
+
+```json
+{"longitude":121.5,"latitude":25.03,"description":"台北車站"}
+```
 
 ## API
 
-`require('form').open(spec)` opens a new listed `acwrite` buffer and returns its buffer number. Call from Normal mode, a user command, or a Normal-mode mapping. No `setup()` call required.
+`require('form').open(spec)` opens a new listed `acwrite` buffer and returns its buffer number. Call from Normal mode, a user command, or a Normal-mode mapping.
 
 | Form option | Meaning |
 | --- | --- |
 | `title` | Display name for the virtual buffer (default `form`). |
 | `fields` | Non-empty ordered list of field definitions. |
 | `window` | `split` (default), `vsplit`, or `current`. |
+| `path` | Optional default local output path, made absolute when the form opens; explicit `:w filename` overrides it for that write only. |
+| `format` | `raw` (default), `json`, or a function `(data, ctx) -> string or string[]`. Used only by the built-in writer when a path is available. |
 | `validate` | Optional function `(data) -> nil or { field_name = 'message' }`. |
-| `on_submit` | Optional synchronous function `(data, context)`. |
+| `on_submit` | Optional synchronous function `(data, ctx)` that replaces the built-in writer. |
 | `mappings` | Buffer-local Tab/Shift-Tab mappings; set `false` to keep your own. |
 | `diagnostic` | Native diagnostic display options; merged with defaults. |
 | `notify` | Set `false` to disable the success notification. |
@@ -59,7 +74,7 @@ Run `:LocationForm`. Tab and Shift-Tab move between the native snippet tabstops.
 | `min`, `max` | Inclusive numeric bounds for `number` and `integer`. |
 | `validate` | Optional function `(value) -> true` or `false, 'message'`. |
 
-Numbers use Lua `tonumber`, then reject non-finite values. Integers must have no fractional part. Boolean text must be exactly `true` or `false`. All field values are trimmed; an omitted optional value is absent (`nil`) in the returned table. A field's custom validator runs only if that field has a non-empty, successfully parsed value. The form-level validator runs only when all field-level checks pass.
+Numbers use Lua `tonumber`, then reject non-finite values. Integers must have no fractional part. Boolean text must be exactly `true` or `false`. All field values are trimmed during parsing; an omitted optional value is absent (`nil`) in the returned table. A field's custom validator runs only if that field has a non-empty, successfully parsed value. The form-level validator runs only when all field-level checks pass.
 
 ### Custom validation and cross-field rules
 
@@ -82,44 +97,103 @@ require('form').open({
     end
     -- nil or {} means success; use _form for a general error.
   end,
-  on_submit = function(data, context)
-    vim.print(data, context)
+  on_submit = function(data, ctx)
+    vim.print(data, ctx)
   end,
 })
 ```
 
-### Writing to a real file
+## Writing to a real file
 
-A form buffer is virtual. The plugin does not write any disk file by default. Define persistence in `on_submit`:
+You do not need an `on_submit` callback to write to disk. The built-in writer runs after validation if an output path is available and no custom `on_submit` is defined.
+
+| Command | Behavior |
+| --- | --- |
+| `:w` | Use `path` if configured; otherwise validate and submit without writing a file. |
+| `:w ~/my.txt` | Use the specified path instead of the default. |
+| `:w! ~/my.txt` | Permit replacing an existing regular file; validation still runs. |
+| `:wq ~/my.txt` | Validate and write, then close the window only on success. |
+| `:w!` | Permit replacing the configured default file. |
+
+Explicit destinations are one-time exports. The buffer keeps its `form://` name, and a subsequent bare `:w` does not reuse the previous explicit filename. If a default file already exists, use `:w!` to replace it. Neovim may reject an explicit existing destination before `BufWriteCmd` is reached; such a command does not submit or write the form. A bare `:w` with neither `path` nor `on_submit` preserves the original validation-only behavior of v0.1.0.
+
+### Output formats
+
+| `format` | Output |
+| --- | --- |
+| `raw` | Exact form buffer lines, including labels and original whitespace, with LF separators and a final newline. |
+| `json` | A JSON object containing validated, typed field values and a final newline. Optional empty fields are omitted; an entirely empty object is `{}`. |
+| Function | A string or a dense list of single-line strings, using validated data and submission context. A nonempty list is joined by LF with a final newline; an empty list writes an empty file. A string gets a final LF if it does not already end in one. |
+
+Choose a format explicitly; file extensions do not select the serializer automatically. The built-in writer emits UTF-8 text with LF line endings rather than applying Neovim file encoding and line-ending options.
 
 ```lua
-on_submit = function(data)
-  local path = vim.fn.stdpath('data') .. '/location.json'
-  if vim.fn.writefile({ vim.json.encode(data) }, path) ~= 0 then
-    return false, 'Could not write ' .. path
+require('form').open({
+  title = 'location',
+  fields = {
+    { name = 'longitude', type = 'number', required = true, min = -180, max = 180 },
+    { name = 'latitude', type = 'number', required = true, min = -90, max = 90 },
+    { name = 'description', required = true },
+  },
+  path = '~/location.txt', -- optional; omit to specify a destination via :w
+  format = function(data, ctx)
+    return {
+      'Longitude: ' .. data.longitude,
+      'Latitude: ' .. data.latitude,
+      'Description: ' .. data.description,
+    }
+  end,
+})
+```
+
+The built-in writer requires the parent directory to exist. It stages output in a temporary file in that directory, creates the destination without overwriting (using a hard link), or replaces an existing regular file with `:w!` (using rename). New files have private temporary-file permissions (normally `0600` on POSIX); forced replacement preserves ordinary permission bits but not ownership, ACLs, extended attributes or hard-link identity. The destination filesystem must support the corresponding link/rename operations. Symbolic links, directories and other non-regular existing destinations are rejected. This is not a substitute for backups or a security boundary.
+
+### Custom submission
+
+`on_submit(data, ctx)` takes full responsibility for persistence, even when a path is supplied. The built-in serializer and writer do not run when this callback is configured. The plugin does not create a file or implement filesystem overwrite checks for the callback; handle those details yourself if needed. Neovim may still reject an explicit existing destination before invoking the callback.
+
+| Context field | Meaning |
+| --- | --- |
+| `bufnr` | Form buffer number. |
+| `title` | Form title. |
+| `path` | Effective absolute local path, or `nil` if neither an explicit destination nor `path` was supplied. |
+| `force` | Boolean indicating whether the write command used `!`. |
+
+For example, use your own persistence function or send validated data to another subsystem:
+
+```lua
+on_submit = function(data, ctx)
+  if not ctx.path then
+    return false, 'Please specify an output path'
   end
+  -- Your own synchronous persistence code goes here.
+  -- For ordinary file exports, omit on_submit and use format instead.
+  vim.print(data, ctx.path, ctx.force)
 end,
 ```
 
-The callback can instead write a database entry, send an IPC request, or update another buffer. Returning `false, message` or throwing an error rejects the write. Any other normal return (including nil) means success. Callback completion must be synchronous. Do not change/delete the form buffer itself from the callback. If a callback has external side effects and subsequently fails, the plugin cannot roll them back.
+Returning `false, message` or throwing an error rejects the write. Any other normal return (including nil) means success. Callbacks and format functions must complete synchronously and must not change/delete the form buffer itself. If a callback has external side effects and subsequently fails, the plugin cannot roll them back.
 
 ## Write semantics
 
-- `:w` checks all fields and submits if valid, even if the snippet session has ended or the buffer has not changed. Repeated writes call the submission callback again; callbacks should handle duplicates if necessary.
-- A failed validation or callback produces a real write error, retains the modified flag, and does not mark the form as saved. `:w!` uses the same validation. On a failed write, `:wq` is intended to stay open.
-- A successful submission clears the plugin's diagnostics and resets `modified`. `:wq` then closes the window. `:update` and `:x` may skip writing an already unmodified buffer, as usual.
+- When Neovim accepts `:w` and reaches the form write handler, it checks all fields and submits if valid, independently of snippet state or the modified flag. Repeated writes call the submission callback again; callbacks should handle duplicates if necessary.
+- Failed validation, serialization, file I/O or submission within the write handler raises a write error, retains `modified`, and displays diagnostics. `:w!` never bypasses validation. A failed `:wq` should leave the form open.
+- Successful submission clears the plugin's diagnostics and resets `modified`. `:update` and `:x` may skip writing an already unmodified buffer, as usual.
 - Diagnostics are snapshots from the last write attempt; they are not revalidated while typing. The next write replaces them.
-- A form uses exactly one line per field, in schema order. Labels are part of the structure and must stay intact. Colons inside values are fine. Multiline values are not supported in this version.
-- Alternate filenames, partial writes, and appending are unsupported. `:write !command` is Neovim's external-filter/output mechanism, not a form submission. This plugin is a workflow tool, not a security boundary.
-- Normal buffers are unaffected. Forms can be hidden and reopened using `:buffer` / `:ls`. Use `:bd!` to discard a form buffer; `:q!` closes its window and may leave the buffer hidden if other windows remain.
-- Neovim's global `autowrite`/`autowriteall` can also initiate writes; turn them off if you want submission only when you explicitly write.
+- A form uses exactly one line per field, in schema order. Labels must stay intact. Colons inside values are fine. Multiline values are not supported.
+- Partial writes and appending are unsupported. `:saveas` is not a supported form workflow; use `:w filename` instead. `:write !command` is Neovim's external-filter/output mechanism, not form submission.
+- Normal buffers are unaffected. Forms can be hidden and reopened using `:buffer` / `:ls`. Use `:bd!` to discard a form buffer; `:q!` may leave it hidden if other windows remain.
+- Global `autowrite`/`autowriteall` can also initiate writes; turn them off if you want submission only on explicit writes.
 
 ## Development
 
 ```sh
 make test
+# or: make test NVIM=/path/to/nvim
 ```
 
-The first suite tests the pure Lua schema, parsing, validation and snippet rendering. The second requires Neovim and exercises real write events, failure/retry, forced writes, `:wq`, and callback rejection.
+The schema, serializer, and simulated-filesystem writer unit suites can also be run using standalone Lua. The integration suites require Neovim 0.12+ and exercise write events, failure/retry, callback context, actual files, output formats, overwrite protection and `:wq`.
 
-Build verification: pure Lua schema tests and Lua syntax checks passed using Lua 5.4. Neovim was unavailable in the build environment, so the integration suite is supplied but has not been run there. Run `make test` on Neovim 0.12+ before relying on it in production.
+## Versions
+
+See [CHANGELOG.md](CHANGELOG.md). The project follows [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) and [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/). Changes stay under `Unreleased` until a release is explicitly made.

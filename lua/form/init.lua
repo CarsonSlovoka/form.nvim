@@ -1,5 +1,6 @@
 local api = vim.api
 local schema = require('form.schema')
+local output = require('form.output')
 local M = {}
 local ns = api.nvim_create_namespace('form.nvim')
 
@@ -42,6 +43,8 @@ end
 --- @return integer bufnr
 function M.open(spec)
   local definition = schema.compile(spec)
+  local format = output.check_format(spec.format)
+  local default_path = spec.path ~= nil and output.path(spec.path) or nil
   local title = spec.title or 'form'
   assert(type(title) == 'string' and title ~= '', 'form.nvim: title must be a non-empty string')
   local window = spec.window or 'split'
@@ -64,29 +67,42 @@ function M.open(spec)
   bo.filetype = 'form'
   local writing = false
   local function write(ev)
-    local name = api.nvim_buf_get_name(buf)
-    -- A form is not a disk file. Reject explicit alternate destinations.
-    if ev.match ~= name and ev.file ~= name and ev.match ~= uri and ev.file ~= uri then
-      fail(buf, 'write the form with :w (alternate filenames are unsupported)')
-    end
     if writing then fail(buf, 'recursive submission is unsupported') end
+    local name = api.nvim_buf_get_name(buf)
+    local force = vim.v.cmdbang == 1
     local lines = api.nvim_buf_get_lines(buf, 0, -1, false)
     local data, errors = schema.validate(definition, lines)
     diagnostics(buf, errors, display)
     if not data then
       fail(buf, ('Validation failed (%d error%s)'):format(#errors, #errors == 1 and '' or 's'))
     end
-    -- Synchronous callback: returning false or throwing means write failure.
-    if definition.on_submit then
-      writing = true
-      local ok, accepted, message = pcall(definition.on_submit, data, { bufnr = buf, title = title })
-      writing = false
-      if not ok or accepted == false then
-        local reason = not ok and accepted or (message or 'Submission rejected')
-        local text = 'Submission failed: ' .. tostring(reason)
-        diagnostics(buf, { { name = '_form', row = 0, col = 0, last = #lines[1], message = text } }, display)
-        fail(buf, text)
+
+    writing = true
+    local ok, reason = pcall(function()
+      -- <afile> preserves the filename spelling; <amatch> is only used as
+      -- a fallback. A bare :w targets the virtual buffer name.
+      local target = ev.file ~= '' and ev.file or ev.match
+      local path = default_path
+      if target ~= name and target ~= uri and ev.match ~= name and ev.match ~= uri then
+        path = output.path(target)
       end
+      local ctx = { bufnr = buf, title = title, path = path, force = force }
+
+      -- A custom submit callback takes full responsibility for persistence.
+      -- Without one, use the configured serializer and built-in file writer.
+      if definition.on_submit then
+        local accepted, message = definition.on_submit(data, ctx)
+        if accepted == false then error(message or 'Submission rejected', 0) end
+      elseif path then
+        local contents = output.serialize(format, data, ctx, lines)
+        output.write(path, contents, force)
+      end
+    end)
+    writing = false
+    if not ok then
+      local text = 'Submission failed: ' .. tostring(reason)
+      diagnostics(buf, { { name = '_form', row = 0, col = 0, last = #lines[1], message = text } }, display)
+      fail(buf, text)
     end
     vim.diagnostic.reset(ns, buf)
     bo.modified = false

@@ -19,8 +19,10 @@ Call from Normal mode. Options:
     title         string, default 'form'
     fields        ordered non-empty list of field definitions
     window        'split' (default), 'vsplit', or 'current'
+    path          optional default local output path, absolute at open time
+    format        'raw' (default), 'json', or function(data, ctx)
     validate      function(data) -> nil or { field = message }
-    on_submit     function(data, context) -> nil or false, message
+    on_submit     function(data, ctx) -> nil or false, message
     mappings      boolean, default true; buffer-local Tab and Shift-Tab
     diagnostic    table of vim.diagnostic display options
     notify        boolean, default true
@@ -45,9 +47,7 @@ Example: >lua
           min = -90, max = 90, required = true },
         { name = 'description', required = true },
       },
-      on_submit = function(data)
-        vim.print(data)
-      end,
+      format = 'json',
     })
 <
 The input is trimmed, optional empty fields are omitted, and numeric/boolean
@@ -57,19 +57,52 @@ field-level validation succeeds. Use _form for a general error.
 ===============================================================================
 3. Writing                                                       *form-write*
 
-Use :w to validate and submit. The callback receives the typed data and a
-context table containing bufnr and title. Returning false, message or raising
-an error rejects submission; successful synchronous completion clears the
-modified flag. By default no disk file is written: persistence is up to the
-callback. It must not change/delete the form buffer itself.
+:w                  Validate and submit, using path if configured.
+:w ~/location.json  Validate and export to the specified destination.
+:w! ~/location.json Validate and allow replacement of an existing regular file.
+:wq ~/location.json Validate, write, and close the window on success.
 
-:w! validates in exactly the same way. :wq closes on success; failed writes
-are intended to leave the form open. Use :bd! to discard a pending buffer.
-Diagnostics update on write only. Repeated :w commands submit again. Global
-'autowrite' and 'autowriteall' may also initiate submission.
+Explicit paths override the default for one write only. The form retains its
+virtual buffer name. Without a path or callback, :w only validates.
 
-One line per field, fixed schema order. Multiline values, alternate filenames,
-partial writes and append are not supported. External :write !command is not
-submission. See README.md for details and testing status.
+Output formats:                                                  *form-format*
+    raw     Original buffer lines, including labels and whitespace.
+    json    JSON object of validated, typed values.
+    function(data, ctx) -> string or dense string[]
+            Custom output. Lines are joined with LF and a final LF;
+            an empty list produces an empty file. A string is given a
+            trailing LF if missing.
+
+The built-in writer uses UTF-8 and LF. Filename extensions do not select a
+format. The parent directory must exist. Output is staged in a temporary file
+in that directory; exclusive creation uses a hard link and forced replacement
+uses rename. Existing non-regular destinations (including symlinks) are
+rejected. See README.md for filesystem and permission details.
+
+Custom submission:                                               *form-submit*
+
+If on_submit is set, it replaces built-in serialization and persistence.
+The callback receives validated data and a context table:
+
+    bufnr     form buffer number
+    title     form title
+    path      effective absolute local file path, or nil
+    force     true if the write command used !
+
+The custom serializer receives the same context. The callback owns all
+persistence and overwrite checks. Returning false, message or raising an
+error rejects submission. Other normal returns mean success. Both callback
+and serializer must be synchronous and must not modify/delete the form buffer.
+
+Successful submission clears diagnostics and resets 'modified'. Any failure
+raises a write error and retains 'modified'. :w! never bypasses validation.
+:wq closes on success; failed writes should leave the form open. Use :bd! to
+discard a pending buffer. Diagnostics update on write only. Repeated :w
+commands submit again. Global 'autowrite' and 'autowriteall' can initiate
+submission. :update and :x may skip unmodified buffers.
+
+One line per field, fixed schema order. Multiline values, partial writes,
+append and :saveas workflows are not supported. External :write !command
+is not form submission. See README.md and README.zh_TW.md for details.
 
 vim:tw=78:ts=8:noet:ft=help:norl:
