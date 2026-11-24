@@ -1,0 +1,75 @@
+*form.txt*    Native snippet forms with write-time validation
+
+===============================================================================
+1. Introduction                                                 *form.nvim*
+
+form.nvim creates a virtual form buffer. Native vim.snippet handles input,
+and BufWriteCmd implements :write as validation followed by submission.
+Validation is independent of the snippet session. No dependencies required.
+
+Requires Neovim 0.12+. No setup() call is needed.
+
+===============================================================================
+2. API                                                           *form.open()*
+
+require('form').open(spec) -> bufnr
+
+Call from Normal mode. Options:
+
+    title         string, default 'form'
+    fields        ordered non-empty list of field definitions
+    window        'split' (default), 'vsplit', or 'current'
+    validate      function(data) -> nil or { field = message }
+    on_submit     function(data, context) -> nil or false, message
+    mappings      boolean, default true; buffer-local Tab and Shift-Tab
+    diagnostic    table of vim.diagnostic display options
+    notify        boolean, default true
+
+Fields:
+
+    name          required unique key; _form is reserved
+    label         display label, defaults to name
+    type          'string' (default), 'number', 'integer', 'boolean'
+    required      boolean, default false
+    default       single-line scalar initial value
+    min, max      inclusive bounds for numeric fields
+    validate      function(value) -> true or false, message
+
+Example: >lua
+    require('form').open({
+      title = 'location',
+      fields = {
+        { name = 'longitude', type = 'number',
+          min = -180, max = 180, required = true },
+        { name = 'latitude', type = 'number',
+          min = -90, max = 90, required = true },
+        { name = 'description', required = true },
+      },
+      on_submit = function(data)
+        vim.print(data)
+      end,
+    })
+<
+The input is trimmed, optional empty fields are omitted, and numeric/boolean
+values are converted before submission. Form-level validation runs after
+field-level validation succeeds. Use _form for a general error.
+
+===============================================================================
+3. Writing                                                       *form-write*
+
+Use :w to validate and submit. The callback receives the typed data and a
+context table containing bufnr and title. Returning false, message or raising
+an error rejects submission; successful synchronous completion clears the
+modified flag. By default no disk file is written: persistence is up to the
+callback. It must not change/delete the form buffer itself.
+
+:w! validates in exactly the same way. :wq closes on success; failed writes
+are intended to leave the form open. Use :bd! to discard a pending buffer.
+Diagnostics update on write only. Repeated :w commands submit again. Global
+'autowrite' and 'autowriteall' may also initiate submission.
+
+One line per field, fixed schema order. Multiline values, alternate filenames,
+partial writes and append are not supported. External :write !command is not
+submission. See README.md for details and testing status.
+
+vim:tw=78:ts=8:noet:ft=help:norl:
