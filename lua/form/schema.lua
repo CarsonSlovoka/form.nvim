@@ -35,6 +35,7 @@ function M.compile(spec)
   optional_function(spec.validate, 'validate')
   optional_function(spec.on_submit, 'on_submit')
   local fields, by_name, labels = {}, {}, {}
+  local has_multiline = false
   for i = 1, #spec.fields do
     local f = spec.fields[i]
     check(type(f) == 'table', 'invalid field #' .. i)
@@ -49,18 +50,29 @@ function M.compile(spec)
     check(kind == 'string' or kind == 'number' or kind == 'integer' or kind == 'boolean',
       'unsupported type for ' .. f.name)
     check(f.required == nil or type(f.required) == 'boolean', 'required must be a boolean')
+    check(f.multiline == nil or type(f.multiline) == 'boolean', 'multiline must be a boolean')
+    local multiline = f.multiline == true
+    check(not multiline or kind == 'string', 'multiline requires type string for ' .. f.name)
+    has_multiline = has_multiline or multiline
     local numeric = kind == 'number' or kind == 'integer'
     check(f.min == nil or (numeric and finite(f.min)), 'invalid min for ' .. f.name)
     check(f.max == nil or (numeric and finite(f.max)), 'invalid max for ' .. f.name)
     check(f.min == nil or f.max == nil or f.min <= f.max, 'min exceeds max for ' .. f.name)
-    check(f.default == nil or (scalar(f.default) and not tostring(f.default):find('[%c]')),
-      'default must be a single-line scalar for ' .. f.name)
+    if multiline then
+      check(f.default == nil or (type(f.default) == 'string'
+          and not f.default:gsub('[\n\t]', ''):find('[%c]')),
+        'multiline default must be a string with no control characters except LF and tab for ' .. f.name)
+    else
+      check(f.default == nil or (scalar(f.default) and not tostring(f.default):find('[%c]')),
+        'default must be a single-line scalar for ' .. f.name)
+    end
     optional_function(f.validate, f.name .. '.validate')
     local field = {
       name = f.name,
       label = label,
       type = kind,
       required = f.required == true,
+      multiline = multiline,
       default = f.default,
       min = f.min,
       max = f.max,
@@ -69,21 +81,53 @@ function M.compile(spec)
     }
     fields[i], by_name[f.name], labels[label] = field, field, true
   end
-  return { fields = fields, by_name = by_name, validate = spec.validate, on_submit = spec.on_submit }
+  return {
+    fields = fields,
+    by_name = by_name,
+    has_multiline = has_multiline,
+    validate = spec.validate,
+    on_submit = spec.on_submit
+  }
+end
+
+-- Build snippet and exact plain-text layout from the same schema. Coordinates
+-- are 0-based bytes, including empty values and final empty lines.
+function M.render(schema)
+  local snippets, lines, spans = {}, {}, {}
+  for i, f in ipairs(schema.fields) do
+    local text = f.default == nil and '' or tostring(f.default)
+    local prefix = f.label .. (f.multiline and ':' or ': ')
+    local stop = text == '' and ('${%d}'):format(i) or ('${%d:%s}'):format(i, escape(text))
+    local row = #lines
+    local col = #prefix
+    if f.multiline then
+      lines[#lines + 1] = prefix
+      row, col = #lines, 0
+    end
+    local parts = {}
+    for part in (text .. '\n'):gmatch('(.-)\n') do parts[#parts + 1] = part end
+    if not f.multiline then parts[1] = prefix .. parts[1] end
+    for _, part in ipairs(parts) do lines[#lines + 1] = part end
+    spans[i] = {
+      name = f.name,
+      multiline = f.multiline,
+      start = { row, col },
+      finish = { #lines - 1, #lines[#lines] }
+    }
+    snippets[i] = escape(prefix) .. (f.multiline and '\n' or '') .. stop
+  end
+  return table.concat(snippets, '\n') .. '$0', lines, spans
 end
 
 function M.snippet(schema)
-  local lines = {}
-  for i, f in ipairs(schema.fields) do
-    local text = f.default == nil and '' or tostring(f.default)
-    local stop = text == '' and ('${%d}'):format(i) or ('${%d:%s}'):format(i, escape(text))
-    lines[i] = escape(f.label .. ': ') .. stop
-  end
-  return table.concat(lines, '\n') .. '$0'
+  local snippet = M.render(schema)
+  return snippet
 end
 
-local function convert(f, text)
-  if text == '' then
+local function convert(f, raw)
+  local trimmed = trim(raw)
+  local text = f.multiline and raw or trimmed
+  if trimmed == '' then
     if f.required then return nil, 'Required field' end
     return nil
   end
@@ -102,7 +146,7 @@ local function convert(f, text)
 end
 
 -- Every field gets checked before form-level validation. Error rows/columns are 0-based bytes.
-function M.validate(schema, lines)
+local function validate_with(schema, lines, read_field, check_extra)
   local data, errors, positions = {}, {}, {}
   local function report(name, message, pos)
     pos = pos or { row = 0, col = 0, last = #(lines[1] or '') }
@@ -111,21 +155,16 @@ function M.validate(schema, lines)
     }
   end
   for i, f in ipairs(schema.fields) do
-    local line = lines[i]
-    local row = math.min(i - 1, math.max(0, #lines - 1))
-    local pos = { row = row, col = 0, last = #(lines[row + 1] or '') }
+    local raw, pos, problem = read_field(i, f)
     positions[f.name] = pos
-    local prefix = f.label .. ':'
-    if not line or line:sub(1, #prefix) ~= prefix then
-      report(f.name, 'Expected field: ' .. f.label .. ':', pos)
+    if problem then
+      report(f.name, problem, pos)
     else
-      local raw = line:sub(#prefix + 1)
-      pos.col = #prefix + #(raw:match('^%s*') or '')
-      local value, message = convert(f, trim(raw))
+      local value, message = convert(f, raw)
       if message then report(f.name, message, pos) else data[f.name] = value end
     end
   end
-  if #lines > #schema.fields then
+  if check_extra and #lines > #schema.fields then
     local row = #schema.fields
     report('_form', 'Unexpected extra line(s); use one line per field', { row = row, col = 0, last = #lines[row + 1] })
   end
@@ -161,6 +200,31 @@ function M.validate(schema, lines)
   end
   if #errors > 0 then return nil, errors end
   return data, errors
+end
+
+-- The legacy parser deliberately remains compatible with single-line forms,
+-- including whole-line replacement and optional whitespace after the colon.
+function M.validate(schema, lines)
+  check(not schema.has_multiline, 'multiline forms require tracked ranges')
+  return validate_with(schema, lines, function(i, f)
+    local line = lines[i]
+    local row = math.min(i - 1, math.max(0, #lines - 1))
+    local pos = { row = row, col = 0, last = #(lines[row + 1] or '') }
+    local prefix = f.label .. ':'
+    if not line or line:sub(1, #prefix) ~= prefix then
+      return nil, pos, 'Expected field: ' .. f.label .. ':'
+    end
+    local raw = line:sub(#prefix + 1)
+    pos.col = #prefix + #(raw:match('^%s*') or '')
+    return raw, pos
+  end, true)
+end
+
+-- Only called after the independent range tracker has checked the structure.
+function M.validate_ranges(schema, lines, values, positions)
+  return validate_with(schema, lines, function(_, f)
+    return values[f.name], positions[f.name]
+  end, false)
 end
 
 return M

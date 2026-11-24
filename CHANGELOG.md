@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Opt-in `multiline = true` for string fields, including multiline defaults and preservation of nonblank whitespace, indentation, and line breaks.
+- Independent Extmark label anchors and structural diagnostics for mixed/multiline forms; values remain available after the native snippet session ends.
+- Multiline schema, range, and integration tests covering linewise edits, label-like value text, invalid structures, Undo/Redo, diagnostics, and raw/JSON exports.
 - Support for specifying a local output destination with `:w filename`, `:w! filename`, and `:wq filename`.
 - Built-in file persistence with raw text, JSON, and custom serializer functions via the `format` option.
 - Optional `path` setting for a default output destination; an explicit filename overrides it for a single write.
@@ -19,8 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Mixed/multiline forms check anchored field structure during editing and again before submission; data validators and submission callbacks still run only on write. Single-line-only forms retain the legacy parser.
+- The location example and bilingual documentation demonstrate multiline descriptions.
 - Forms without an `on_submit` callback can now write directly to disk when an output path is supplied.
-- The location example now demonstrates built-in JSON export instead of requiring a custom submission callback.
+- The README location examples demonstrate built-in JSON export; the standalone example retains its custom submission callback.
 
 ## [0.1.0]
 

@@ -1,6 +1,7 @@
 local api = vim.api
 local schema = require('form.schema')
 local output = require('form.output')
+local ranges = require('form.ranges')
 local M = {}
 local ns = api.nvim_create_namespace('form.nvim')
 
@@ -38,7 +39,7 @@ local function set_mappings(buf)
   end
 end
 
---- Open a single-line-per-field form. Call from Normal mode.
+--- Open a schema-driven form. Call from Normal mode.
 --- @param spec table
 --- @return integer bufnr
 function M.open(spec)
@@ -51,7 +52,7 @@ function M.open(spec)
   assert(window == 'split' or window == 'vsplit' or window == 'current', 'form.nvim: invalid window')
   assert(spec.diagnostic == nil or type(spec.diagnostic) == 'table', 'form.nvim: diagnostic must be a table')
   assert(vim.snippet and vim.snippet.expand, 'form.nvim: native vim.snippet is required')
-  local snippet = schema.snippet(definition)
+  local snippet, expected, spans = schema.render(definition)
   local display = vim.tbl_extend('force', {
     virtual_text = true, underline = true, signs = true, update_in_insert = false,
   }, spec.diagnostic or {})
@@ -66,12 +67,24 @@ function M.open(spec)
   bo.modeline = false
   bo.filetype = 'form'
   local writing = false
+  local tracker
   local function write(ev)
     if writing then fail(buf, 'recursive submission is unsupported') end
     local name = api.nvim_buf_get_name(buf)
     local force = vim.v.cmdbang == 1
     local lines = api.nvim_buf_get_lines(buf, 0, -1, false)
-    local data, errors = schema.validate(definition, lines)
+    local data, errors
+    if tracker then
+      local values, structure_errors, positions = tracker:refresh()
+      if not values then
+        vim.diagnostic.reset(ns, buf)
+        fail(buf, ('Invalid form structure (%d error%s); use undo to restore labels and separators')
+          :format(#structure_errors, #structure_errors == 1 and '' or 's'))
+      end
+      data, errors = schema.validate_ranges(definition, lines, values, positions)
+    else
+      data, errors = schema.validate(definition, lines)
+    end
     diagnostics(buf, errors, display)
     if not data then
       fail(buf, ('Validation failed (%d error%s)'):format(#errors, #errors == 1 and '' or 's'))
@@ -115,16 +128,33 @@ function M.open(spec)
     desc = 'Reject unsupported form writes',
   })
   if spec.mappings ~= false then set_mappings(buf) end
-  -- No snippet completion hooks and no TextChanged validation.
+  -- Native snippet navigation; only mixed/multiline forms watch structure.
+  -- User validators and submission callbacks still run exclusively on write.
   local ok, err = pcall(function()
     if window == 'split' then vim.cmd.split() end
     if window == 'vsplit' then vim.cmd.vsplit() end
     api.nvim_win_set_buf(0, buf)
     api.nvim_win_set_cursor(0, { 1, 0 })
-    vim.snippet.expand(snippet)
+    if definition.has_multiline then
+      -- Snippet expansion normally converts literal tabs when expandtab is on.
+      -- Preserve the schema's exact default bytes and the computed coordinates.
+      -- The initial layout is a baseline, not an undoable user edit.
+      local expandtab, undolevels = bo.expandtab, bo.undolevels
+      bo.expandtab, bo.undolevels = false, -1
+      local expanded, reason = pcall(vim.snippet.expand, snippet)
+      bo.expandtab, bo.undolevels = expandtab, undolevels
+      if not expanded then error(reason, 0) end
+      assert(vim.deep_equal(api.nvim_buf_get_lines(buf, 0, -1, false), expected),
+        'form.nvim: native snippet expansion did not match the form layout')
+      tracker = ranges.attach(buf, spans)
+      tracker:watch(display)
+    else
+      vim.snippet.expand(snippet)
+    end
     bo.modified = true
   end)
   if not ok then
+    if api.nvim_get_current_buf() == buf and vim.snippet.active() then vim.snippet.stop() end
     pcall(api.nvim_buf_delete, buf, { force = true })
     error(err, 0)
   end

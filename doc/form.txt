@@ -5,7 +5,8 @@
 
 form.nvim creates a virtual form buffer. Native vim.snippet handles input,
 and BufWriteCmd implements :write as validation followed by submission.
-Validation is independent of the snippet session. No dependencies required.
+Validation is independent of the snippet session. Forms with multiline
+fields use independent Extmark label anchors. No dependencies required.
 
 Requires Neovim 0.12+. No setup() call is needed.
 
@@ -33,7 +34,8 @@ Fields:
     label         display label, defaults to name
     type          'string' (default), 'number', 'integer', 'boolean'
     required      boolean, default false
-    default       single-line scalar initial value
+    multiline     boolean, default false; string fields only
+    default       single-line scalar, or multiline string (LF and tab allowed)
     min, max      inclusive bounds for numeric fields
     validate      function(value) -> true or false, message
 
@@ -45,14 +47,40 @@ Example: >lua
           min = -180, max = 180, required = true },
         { name = 'latitude', type = 'number',
           min = -90, max = 90, required = true },
-        { name = 'description', required = true },
+        { name = 'description', required = true, multiline = true },
       },
       format = 'json',
     })
 <
-The input is trimmed, optional empty fields are omitted, and numeric/boolean
-values are converted before submission. Form-level validation runs after
+Single-line values are trimmed; nonblank multiline strings retain their exact
+whitespace and newlines. Empty or whitespace-only optional fields are omitted.
+Numeric/boolean values are converted before submission. Form-level validation runs after
 field-level validation succeeds. Use _form for a general error.
+
+Multiline fields:                                             *form-multiline*
+
+A multiline string uses a separate label line followed by its value lines: >
+    Title: Hello
+    Description:
+    First line
+      Second line
+    Author: Admin
+<
+Set multiline = true in a string field definition. The label is anchored by
+an independent Extmark; the next label or end of buffer determines its value
+range. Label-like text in a value is not parsed as a field. Keep all labels
+intact and in schema order, at the start of their lines. In a mixed form,
+single-line fields must retain the exact label prefix and stay on one line.
+Keep at least one value line for every multiline field, even when empty.
+
+Use ordinary Insert/Normal mode editing. Structural errors update on text
+changes (display in Insert mode follows diagnostic.update_in_insert). User
+validators still run only on write. Undo/Redo restores/updates label anchors;
+use Undo for accidentally deleted or replaced labels, rather than recreating
+them by hand. Initial expansion is not an undoable edit. Do not replace the
+whole mixed-form buffer. Snippet navigation still uses native vim.snippet;
+when the session ends, range tracking and submission remain independent.
+Forms with only single-line fields keep the original line-based parser.
 
 ===============================================================================
 3. Writing                                                       *form-write*
@@ -97,12 +125,13 @@ and serializer must be synchronous and must not modify/delete the form buffer.
 Successful submission clears diagnostics and resets 'modified'. Any failure
 raises a write error and retains 'modified'. :w! never bypasses validation.
 :wq closes on success; failed writes should leave the form open. Use :bd! to
-discard a pending buffer. Diagnostics update on write only. Repeated :w
+discard a pending buffer. Value diagnostics update on write only; mixed forms
+also report structural errors during editing. Repeated :w
 commands submit again. Global 'autowrite' and 'autowriteall' can initiate
 submission. :update and :x may skip unmodified buffers.
 
-One line per field, fixed schema order. Multiline values, partial writes,
-append and :saveas workflows are not supported. External :write !command
+Fixed schema order. Single-line and multiline string fields are supported.
+Partial writes, append and :saveas workflows are not supported. External :write !command
 is not form submission. See README.md and README.zh_TW.md for details.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

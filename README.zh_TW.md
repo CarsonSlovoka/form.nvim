@@ -4,7 +4,7 @@
 
 `form.nvim` 是一個適用於 Neovim 0.12 以上版本、不需要第三方相依套件的輕量表單工具
 
-透過原生 `vim.snippet` 提供表單欄位輸入與跳轉，直到執行 `:write` 時才驗證整份表單，驗證成功後提交資料或寫入實體檔案。不依賴 snippet 完成事件、私有 API、LSP 或即時驗證
+透過原生 `vim.snippet` 提供表單欄位輸入與跳轉，支援單行及多行字串欄位。含有多行欄位的表單透過獨立 Extmark 追蹤欄位結構，編輯時提示結構錯誤，資料驗證與提交仍在執行 `:write` 時進行。不依賴 snippet 完成事件、私有 API、LSP 或外部套件
 
 ## 安裝
 
@@ -36,7 +36,7 @@ vim.api.nvim_create_user_command('LocationForm', function()
     fields = {
       { name = 'longitude', label = '經度', type = 'number', min = -180, max = 180, required = true },
       { name = 'latitude', label = '緯度', type = 'number', min = -90, max = 90, required = true },
-      { name = 'description', label = '描述', required = true },
+      { name = 'description', label = '描述', multiline = true, required = true },
     },
     format = 'json',
   })
@@ -48,21 +48,23 @@ end, {})
 ```text
 經度: 121.5
 緯度: 25.03
-描述: 台北車站
+描述:
+台北車站
+  附近有許多商店
 ```
 
 | 按鍵或指令 | 行為 |
 | --- | --- |
 | `Tab` | 跳到下一個 snippet 欄位 |
 | `Shift-Tab` | 跳到上一個 snippet 欄位 |
-| `Esc` | 離開輸入模式，不執行驗證 |
+| `Esc` | 離開輸入模式，不觸發資料驗證 |
 | `:w ~/location.json` | 驗證全部欄位，成功後寫入指定檔案 |
 | `]d` / `[d` | 跳到下一個或上一個 Diagnostic |
 
 輸出範例（JSON 欄位順序不保證固定）：
 
 ```json
-{"longitude":121.5,"latitude":25.03,"description":"台北車站"}
+{"longitude":121.5,"latitude":25.03,"description":"台北車站\n  附近有許多商店"}
 ```
 
 如果驗證失敗，Neovim 會顯示 Diagnostic，並阻止寫入。修正內容後再次執行 `:w` 即可，無須重新建立表單或重新進入 snippet
@@ -94,7 +96,8 @@ end, {})
 | `label` | 顯示名稱，預設使用 `name`，可使用繁體中文，不可重複或包含冒號及控制字元 |
 | `type` | 欄位型別：`string`（預設）、`number`、`integer`、`boolean` |
 | `required` | 是否必填，預設為 `false`，設為 `true` 時不可留空或只輸入空白 |
-| `default` | 單行的純量預設值，跳到有預設值的欄位時會選取該值 |
+| `multiline` | 是否允許多行內容，預設為 `false`，僅適用於 `string` 型別 |
+| `default` | 單行純量預設值，或多行欄位可包含 LF、Tab 的字串；原生 snippet 會選取非空的預設值 |
 | `min`、`max` | 數值型別的最小值與最大值，包含邊界值 |
 | `validate` | 選填的欄位驗證函數 `(value) -> true` 或 `false, 'message'` |
 
@@ -107,9 +110,45 @@ end, {})
 | `integer` | 數值必須為整數，不可包含小數部分 |
 | `boolean` | 只能輸入 `true` 或 `false` |
 
-解析時會移除每個欄位值前後的空白字元。非必填欄位若留空，回傳的 Lua table 中不會包含該欄位（值為 `nil`）
+單行欄位解析時會移除值前後的空白字元；多行欄位則保留非空白內容的原始換行、縮排及前後空白。若欄位留空或只包含空白字元，非必填欄位會省略（值為 `nil`），必填欄位則拒絕提交
 
 只有成功轉換且非空的欄位才會執行自訂欄位驗證函數。所有欄位通過驗證後，才會執行整份表單的 `validate` 函數
+
+### 多行欄位
+
+在字串欄位設定 `multiline = true`，標籤會獨立佔用一行，值從下一行開始，其他欄位仍維持 `Label: value` 的原有格式
+
+```lua
+{
+  name = 'description',
+  label = '描述',
+  type = 'string',
+  multiline = true,
+  default = [[第一行
+  第二行
+
+第三行]],
+}
+```
+
+```text
+標題: Hello
+描述:
+第一行
+  第二行
+
+第三行
+作者: Admin
+```
+
+- 可使用 Enter 換行、貼上多行文字，或在多行欄位的內容區使用逐行編輯，不必強制縮排或輸入結束符號。即使清空內容，也須保留至少一行值所在的空白行
+- 只要表單包含至少一個多行欄位，所有欄位都會使用獨立的 Extmark 標籤錨點，透過下一個錨點或 buffer 結尾計算值的範圍。即使內容中出現 `作者: Admin` 等類似欄位標籤的文字，也不會被誤判成其他欄位
+- 欄位標籤文字、順序與行首位置必須保持完整；混合表單中的單行欄位也必須保留原本的標籤前綴，且不可跨行
+- 不攔截 Normal mode 操作，也不會自動修改或修復文字。編輯時會重新檢查結構並顯示 Diagnostic（Insert mode 的顯示時機依 `diagnostic.update_in_insert`），可使用 `u` 與 `Ctrl-R` 復原或重做。整個標籤遭刪除或替換時，即使手動輸入相同文字也可能無法恢復錨點，建議使用 Undo。初始表單不列入 Undo 歷史，請避免整份替換混合表單的 buffer
+- `vim.snippet` 仍負責原生 placeholder 與欄位跳轉。即使 session 結束，仍可繼續編輯及提交；結構檢查不會執行自訂驗證函數，直到 `:w` 才依序檢查結構、型別、資料及提交
+- 未使用多行欄位的表單維持原本的逐行解析與寫入時驗證，也保留整行替換的使用方式
+
+提交時收到的是 Lua 字串，而不是 table。JSON 格式會以 `\n` 編碼換行，raw 格式則保留原始 buffer 行內容
 
 ### 自訂驗證及跨欄位驗證
 
@@ -223,8 +262,8 @@ end,
 - 表單寫入處理程序中的驗證、序列化、檔案寫入或提交失敗時，會產生寫入錯誤、保留 `modified` 狀態並顯示 Diagnostic，`:w!` 也不能跳過驗證
 - 寫入成功才會清除 Diagnostic 並將 `modified` 設為 `false`，失敗的 `:wq` 應保留表單視窗
 - `:update` 與 `:x` 可能略過已經沒有修改的 buffer，這與 Neovim 原本的行為一致
-- Diagnostic 只反映上次寫入的驗證結果，不會隨輸入即時更新
-- 每個欄位固定佔用一行，順序與 schema 一致；欄位標籤必須保持完整，值中可以包含冒號，目前不支援多行欄位
+- 資料驗證及提交錯誤的 Diagnostic 反映上次寫入結果；含有多行欄位的表單會另外隨文字變更更新結構 Diagnostic，下次寫入時重新檢查兩者
+- 欄位順序與 schema 一致，單行欄位佔用一行，多行字串欄位使用獨立標籤行及一行以上的內容；標籤必須保持完整，值中可以包含冒號或與標籤相同的文字
 - 不支援部分範圍寫入及追加寫入，也不支援以 `:saveas` 操作表單；建議使用 `:w filename`，而 `:write !command` 是 Neovim 的外部指令機制，不屬於表單提交
 - 一般 buffer 不受影響；可以用 `:ls` 或 `:buffer` 找回隱藏表單，使用 `:bd!` 丟棄表單，`:q!` 則可能只關閉視窗而保留隱藏 buffer
 - 全域選項 `autowrite`、`autowriteall` 也可能觸發寫入，若希望只在明確執行寫入時提交，請關閉這些選項
@@ -237,7 +276,7 @@ make test
 make test NVIM=/path/to/nvim
 ```
 
-Schema、序列化及模擬檔案系統的寫入單元測試，也可以使用獨立的 Lua 執行；整合測試需要 Neovim 0.12 以上版本，涵蓋寫入事件、驗證失敗重試、callback context、實體檔案、輸出格式、覆蓋保護及 `:wq` 行為
+Schema、序列化及模擬檔案系統的寫入單元測試，也可以使用獨立的 Lua 執行；整合測試需要 Neovim 0.12 以上版本，涵蓋寫入事件、驗證失敗重試、callback context、實體檔案、輸出格式、覆蓋保護、`:wq` 行為、多行範圍追蹤、結構 Diagnostic、Undo/Redo，以及 snippet 結束後的獨立提交
 
 ## 版本管理
 

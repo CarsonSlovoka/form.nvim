@@ -8,3 +8,5 @@ test:
 	$(NVIM) --headless -u NONE -i NONE -n -l tests/writer_test.lua
 	$(NVIM) --headless -u NONE -i NONE -n -l tests/form_test.lua
 	$(NVIM) --headless -u NONE -i NONE -n -l tests/output_test.lua
+	$(NVIM) --headless -u NONE -i NONE -n -l tests/ranges_test.lua
+	$(NVIM) --headless -u NONE -i NONE -n -l tests/multiline_test.lua

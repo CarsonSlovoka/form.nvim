@@ -44,3 +44,48 @@ assert(schema.snippet(escaped) == [[a\$\}: ${1:x\\\$\}}$0]])
 assert(not pcall(schema.compile, { fields = { { name = 'x', min = 1 } } }))
 assert(not pcall(schema.compile, { fields = { { name = 'x' }, { name = 'x' } } }))
 print('schema tests passed')
+
+-- Exact rendered coordinates and whitespace semantics for mixed forms.
+local multi = schema.compile({
+  fields = {
+    { name = 'x', label = '經度', type = 'number', default = 5 },
+    {
+      name = 'note',
+      label = '描述',
+      multiline = true,
+      required = true,
+      default = '\tfirst\n\n  second $}\\\n'
+    },
+    { name = 'empty', multiline = true },
+    { name = 'enabled', type = 'boolean', default = false },
+  }
+})
+local snippet, lines, spans = schema.render(multi)
+assert(multi.has_multiline and not multi.fields[1].multiline)
+assert(table.concat(lines, '\n') == '經度: 5\n描述:\n\tfirst\n\n  second $}\\\n\nempty:\n\nenabled: false')
+assert(snippet:find('描述:\n${2:', 1, true))
+assert(spans[1].start[2] == #'經度: ' and spans[1].finish[2] == #'經度: 5')
+assert(spans[2].start[1] == 2 and spans[2].start[2] == 0)
+assert(spans[2].finish[1] == 5 and spans[2].finish[2] == 0)
+assert(spans[3].start[1] == 7 and spans[3].finish[1] == 7)
+assert(spans[4].start[1] == 8)
+local positions = {}
+for _, span in ipairs(spans) do
+  positions[span.name] = { row = span.start[1], col = span.start[2], last = #lines[span.start[1] + 1] }
+end
+local raw = { x = ' 5 ', note = '\n\t中文\n  content\n\n', empty = ' \n\t', enabled = ' false ' }
+data, errors = schema.validate_ranges(multi, lines, raw, positions)
+assert(data and data.x == 5 and data.note == raw.note and data.empty == nil and data.enabled == false)
+raw.note = ' \n\t'
+data, errors = schema.validate_ranges(multi, lines, raw, positions)
+assert(not data and #errors == 1 and errors[1].name == 'note' and errors[1].row == 2)
+for _, invalid in ipairs({
+  { name = 'x', multiline = 'yes' },
+  { name = 'x', multiline = true, type = 'number' },
+  { name = 'x', multiline = true, default = 42 },
+  { name = 'x', multiline = true, default = 'a\rb' },
+  { name = 'x', default = 'a\nb' },
+}) do
+  assert(not pcall(schema.compile, { fields = { invalid } }))
+end
+print('multiline schema tests passed')

@@ -2,7 +2,7 @@
 
 [English](README.md) | [繁體中文](README.zh_TW.md) | [Changelog](CHANGELOG.md)
 
-A dependency-free form UI for Neovim 0.12+. Native `vim.snippet` handles input; `:write` validates and submits. No snippet-completion hooks, private snippet APIs, LSP, or live validation.
+A dependency-free form UI for Neovim 0.12+. Native `vim.snippet` handles input; `:write` validates and submits. Single-line and multiline string fields are supported. Independent Extmark anchors track multiline form structure and report structural errors during editing; value validation and submission remain write-time only. No snippet-completion hooks, private snippet APIs, LSP, or external dependencies.
 
 ## Install
 
@@ -32,7 +32,7 @@ vim.api.nvim_create_user_command('LocationForm', function()
     fields = {
       { name = 'longitude', label = '經度', type = 'number', min = -180, max = 180, required = true },
       { name = 'latitude', label = '緯度', type = 'number', min = -90, max = 90, required = true },
-      { name = 'description', label = '描述', required = true },
+      { name = 'description', label = '描述', multiline = true, required = true },
     },
     format = 'json',
   })
@@ -44,7 +44,7 @@ Run `:LocationForm`. Tab and Shift-Tab move between native snippet tabstops. Pre
 Example output (JSON key order is not guaranteed):
 
 ```json
-{"longitude":121.5,"latitude":25.03,"description":"台北車站"}
+{"longitude":121.5,"latitude":25.03,"description":"台北車站\n  Nearby shops"}
 ```
 
 ## API
@@ -70,11 +70,44 @@ Example output (JSON key order is not guaranteed):
 | `label` | Optional display label; defaults to `name`. Unique, no colon or control characters. |
 | `type` | `string` (default), `number`, `integer`, `boolean`. |
 | `required` | `true` disallows empty or whitespace-only values. Defaults to `false`. |
-| `default` | Initial single-line scalar value; selected on entering the tabstop if non-empty. |
+| `multiline` | Boolean, default `false`; available for `type = 'string'` only. |
+| `default` | Initial single-line scalar, or a string containing LF/tab for a multiline field; native snippet selects nonempty defaults. |
 | `min`, `max` | Inclusive numeric bounds for `number` and `integer`. |
 | `validate` | Optional function `(value) -> true` or `false, 'message'`. |
 
-Numbers use Lua `tonumber`, then reject non-finite values. Integers must have no fractional part. Boolean text must be exactly `true` or `false`. All field values are trimmed during parsing; an omitted optional value is absent (`nil`) in the returned table. A field's custom validator runs only if that field has a non-empty, successfully parsed value. The form-level validator runs only when all field-level checks pass.
+Numbers use Lua `tonumber`, then reject non-finite values. Integers must have no fractional part. Boolean text must be exactly `true` or `false`. Single-line values are trimmed during parsing. Multiline strings preserve their exact nonblank content, including leading/trailing whitespace and LF. Empty or whitespace-only values are omitted (`nil`) if optional and rejected if required. A field's custom validator runs only if that field has a non-empty, successfully parsed value. The form-level validator runs only when all field-level checks pass.
+
+### Multiline fields
+
+Set `multiline = true` on a string field; the label appears on its own line and the value starts on the next line. Other fields keep their existing `Label: value` layout. For example:
+
+```lua
+{
+  name = 'description',
+  label = 'Description',
+  type = 'string',
+  multiline = true,
+  default = 'First line\n  Second line\n\nThird line',
+}
+```
+
+```text
+Title: Hello
+Description:
+First line
+  Second line
+
+Third line
+Author: Admin
+```
+
+- Enter, paste, and linewise editing inside a multiline value can add or remove lines without imposing indentation or requiring an end delimiter. Keep at least one value line even when empty; clear the text rather than deleting the only value line.
+- Independent Extmark label anchors track all fields of a form containing at least one multiline field. The next anchored label (or end of buffer) determines the value range, so literal text such as `Author: example` in a value is not mistaken for a field. Label text, order and position at the start of its line must remain intact. Single-line fields in a mixed form must stay on one line and retain their exact label prefix.
+- Edits are not intercepted or automatically repaired. Structural diagnostics refresh on text changes (display during Insert mode follows `diagnostic.update_in_insert`); use `u` / `Ctrl-R` to restore or redo structural changes. Replacing an entire anchored label, even with identical text, may invalidate its anchor; use Undo to restore it. The initial layout is not an undoable edit. Avoid replacing the entire mixed-form buffer.
+- Native snippet navigation is unchanged and works while the snippet session is active. After it stops, the form still tracks values, accepts Normal/Insert mode edits, and submits through `:w`. Structural checks do not execute custom validators. `:w` always checks the current structure before type conversion, custom validation or output.
+- Forms without any multiline field keep the original line-based parser and write-time diagnostics, including support for replacing entire lines with the expected labels.
+
+The submitted value is a Lua string, not a list. JSON encodes its newlines as `\n`; raw output preserves the actual buffer lines.
 
 ### Custom validation and cross-field rules
 
@@ -179,8 +212,8 @@ Returning `false, message` or throwing an error rejects the write. Any other nor
 - When Neovim accepts `:w` and reaches the form write handler, it checks all fields and submits if valid, independently of snippet state or the modified flag. Repeated writes call the submission callback again; callbacks should handle duplicates if necessary.
 - Failed validation, serialization, file I/O or submission within the write handler raises a write error, retains `modified`, and displays diagnostics. `:w!` never bypasses validation. A failed `:wq` should leave the form open.
 - Successful submission clears the plugin's diagnostics and resets `modified`. `:update` and `:x` may skip writing an already unmodified buffer, as usual.
-- Diagnostics are snapshots from the last write attempt; they are not revalidated while typing. The next write replaces them.
-- A form uses exactly one line per field, in schema order. Labels must stay intact. Colons inside values are fine. Multiline values are not supported.
+- Value-validation and submission diagnostics are snapshots from the last write attempt. Mixed/multiline forms additionally refresh structural diagnostics during editing; the next write rechecks both.
+- Fields retain schema order. Single-line fields occupy one line; multiline string fields use a label line followed by one or more value lines. Labels must stay intact. Colons and label-like lines inside values are fine.
 - Partial writes and appending are unsupported. `:saveas` is not a supported form workflow; use `:w filename` instead. `:write !command` is Neovim's external-filter/output mechanism, not form submission.
 - Normal buffers are unaffected. Forms can be hidden and reopened using `:buffer` / `:ls`. Use `:bd!` to discard a form buffer; `:q!` may leave it hidden if other windows remain.
 - Global `autowrite`/`autowriteall` can also initiate writes; turn them off if you want submission only on explicit writes.
@@ -192,7 +225,7 @@ make test
 # or: make test NVIM=/path/to/nvim
 ```
 
-The schema, serializer, and simulated-filesystem writer unit suites can also be run using standalone Lua. The integration suites require Neovim 0.12+ and exercise write events, failure/retry, callback context, actual files, output formats, overwrite protection and `:wq`.
+The schema, serializer, and simulated-filesystem writer unit suites can also be run using standalone Lua. The integration suites require Neovim 0.12+ and exercise write events, failure/retry, callback context, actual files, output formats, overwrite protection, `:wq`, multiline range tracking, structural diagnostics, Undo/Redo, and independent submission after the snippet session ends.
 
 ## Versions
 
