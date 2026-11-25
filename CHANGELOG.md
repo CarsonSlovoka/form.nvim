@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-25
+
 ### Added
 
 - Opt-in `multiline = true` for string fields, including multiline defaults and preservation of nonblank whitespace, indentation, and line breaks.
@@ -39,4 +41,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Buffer-local snippet navigation, configurable windows, English README, Neovim help, examples, and tests.
 
 [Unreleased]: #unreleased
+[0.2.0]: #020---2026-11-25
 [0.1.0]: #010

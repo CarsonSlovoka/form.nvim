@@ -12,7 +12,7 @@
 
 ```sh
 mkdir -p ~/.local/share/nvim/site/pack/local/start
-unzip form.nvim-unreleased.zip -d ~/.local/share/nvim/site/pack/local/start
+unzip form.nvim-v0.2.0.zip -d ~/.local/share/nvim/site/pack/local/start
 ```
 
 如果已安裝舊版，請以新的 `form.nvim/` 目錄取代原本的 plugin 目錄，並重新啟動 Neovim
@@ -298,5 +298,7 @@ make test NVIM=/path/to/nvim
 Schema、序列化、提交 context 及模擬檔案系統的寫入單元測試，也可以使用獨立的 Lua 執行；整合測試需要 Neovim 0.12 以上版本，涵蓋寫入事件、驗證失敗重試、callback context 與延遲序列化、實體檔案、輸出格式、覆蓋保護、`:wq` 行為、多行範圍追蹤、結構 Diagnostic、Undo/Redo，以及 snippet 結束後的獨立提交
 
 ## 版本管理
+
+目前正式版本：`v0.2.0`
 
 請參考 [CHANGELOG.md](CHANGELOG.md)。本專案依循 [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) 及 [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/)，尚未正式發布的變更一律記錄於 `Unreleased`，直到正式發布新版本才移入對應的版本區塊

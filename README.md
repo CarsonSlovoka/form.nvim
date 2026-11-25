@@ -6,11 +6,11 @@ A dependency-free form UI for Neovim 0.12+. Native `vim.snippet` handles input; 
 
 ## Install
 
-Extract `form.nvim.zip` (or `form.nvim-unreleased.zip`) into a native package directory. On a default macOS/Linux Neovim setup:
+Extract the `form.nvim-v0.2.0.zip` release archive into a native package directory. On a default macOS/Linux Neovim setup:
 
 ```sh
 mkdir -p ~/.local/share/nvim/site/pack/local/start
-unzip form.nvim-unreleased.zip -d ~/.local/share/nvim/site/pack/local/start
+unzip form.nvim-v0.2.0.zip -d ~/.local/share/nvim/site/pack/local/start
 ```
 
 For an existing installation, replace the old plugin directory with the new `form.nvim/` directory. Restart Neovim. If you use another data directory, check `:echo stdpath('data')`. Run `:helptags ~/.local/share/nvim/site/pack/local/start/form.nvim/doc` to enable `:help form.nvim`.
@@ -243,5 +243,7 @@ make test
 The schema, serializer, submission-context, and simulated-filesystem writer unit suites can also be run using standalone Lua. The integration suites require Neovim 0.12+ and exercise write events, failure/retry, callback context and lazy serialization, actual files, output formats, overwrite protection, `:wq`, multiline range tracking, structural diagnostics, Undo/Redo, and independent submission after the snippet session ends.
 
 ## Versions
+
+Current release: `v0.2.0`.
 
 See [CHANGELOG.md](CHANGELOG.md). The project follows [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) and [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/). Changes stay under `Unreleased` until a release is explicitly made.
