@@ -5,23 +5,15 @@ local form = require('form')
 local submitted, validated, received, context = 0, 0
 local function open(opts)
   local spec = vim.tbl_extend('force', {
-    title = 'multiline',
-    window = 'split',
-    notify = false,
+    title = 'multiline', window = 'split', notify = false,
     fields = {
-      { name = 'title',  default = 'Hello', required = true },
-      {
-        name = 'description',
-        label = '描述',
-        multiline = true,
-        required = true,
-        default = 'One\n\tTwo',
-        validate = function(value)
+      { name = 'title', default = 'Hello', required = true },
+      { name = 'description', label = '描述', multiline = true, required = true,
+        default = 'One\n\tTwo', validate = function(value)
           validated = validated + 1
           return not value:find('INVALID', 1, true), 'Invalid description'
-        end
-      },
-      { name = 'author', required = true,   default = 'Admin' },
+        end },
+      { name = 'author', required = true, default = 'Admin' },
     },
     on_submit = function(data, ctx)
       submitted = submitted + 1
@@ -120,15 +112,11 @@ api.nvim_buf_delete(buf, { force = true })
 local paths = { vim.fn.tempname(), vim.fn.tempname() }
 local ok, err = xpcall(function()
   for i, format in ipairs({ 'json', 'raw' }) do
-    buf = open({
-      format = format,
-      on_submit = false,
-      fields = {
-        { name = 'first',  multiline = true },
-        { name = 'middle', type = 'integer', default = 7 },
-        { name = 'last',   multiline = true, default = '\n  x\n\n' },
-      }
-    })
+    buf = open({ format = format, on_submit = false, fields = {
+      { name = 'first', multiline = true },
+      { name = 'middle', type = 'integer', default = 7 },
+      { name = 'last', multiline = true, default = '\n  x\n\n' },
+    } })
     stop()
     write('w ' .. vim.fn.fnameescape(paths[i]))
     local file = vim.fn.readfile(paths[i])
@@ -142,4 +130,25 @@ local ok, err = xpcall(function()
 end, debug.traceback)
 for _, p in ipairs(paths) do vim.fn.delete(p) end
 assert(ok, err)
+-- Custom submission may use formatted multiline content after snippet stops.
+local destination = vim.fn.tempname()
+local serialized, format_calls
+local success, reason = xpcall(function()
+  format_calls = 0
+  buf = open({ format = function(data)
+    format_calls = format_calls + 1
+    return data.description
+  end, on_submit = function(_, ctx)
+    assert(ctx.write())
+    serialized = ctx.serialize()
+  end })
+  stop()
+  write('w ' .. vim.fn.fnameescape(destination))
+  eq('One\n\tTwo\n', serialized)
+  eq({ 'One', '\tTwo' }, vim.fn.readfile(destination))
+  assert(format_calls == 1)
+  api.nvim_buf_delete(buf, { force = true })
+end, debug.traceback)
+vim.fn.delete(destination)
+assert(success, reason)
 print('multiline integration tests passed')

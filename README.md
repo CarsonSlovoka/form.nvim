@@ -57,9 +57,9 @@ Example output (JSON key order is not guaranteed):
 | `fields` | Non-empty ordered list of field definitions. |
 | `window` | `split` (default), `vsplit`, or `current`. |
 | `path` | Optional default local output path, made absolute when the form opens; explicit `:w filename` overrides it for that write only. |
-| `format` | `raw` (default), `json`, or a function `(data, ctx) -> string or string[]`. Used only by the built-in writer when a path is available. |
+| `format` | `raw` (default), `json`, or a function `(data, ctx) -> string or string[]`. Used lazily by the built-in writer or by `ctx.serialize()` / `ctx.write()`. |
 | `validate` | Optional function `(data) -> nil or { field_name = 'message' }`. |
-| `on_submit` | Optional synchronous function `(data, ctx)` that replaces the built-in writer. |
+| `on_submit` | Optional synchronous function `(data, ctx)` that controls submission and can opt in to the built-in writer. |
 | `mappings` | Buffer-local Tab/Shift-Tab mappings; set `false` to keep your own. |
 | `diagnostic` | Native diagnostic display options; merged with defaults. |
 | `notify` | Set `false` to disable the success notification. |
@@ -183,7 +183,7 @@ The built-in writer requires the parent directory to exist. It stages output in 
 
 ### Custom submission
 
-`on_submit(data, ctx)` takes full responsibility for persistence, even when a path is supplied. The built-in serializer and writer do not run when this callback is configured. The plugin does not create a file or implement filesystem overwrite checks for the callback; handle those details yourself if needed. Neovim may still reject an explicit existing destination before invoking the callback.
+`on_submit(data, ctx)` controls persistence, even when a path is supplied. No serialization or file write happens automatically when a custom callback is configured. Use the context helpers to reuse the configured format and built-in writer, or handle persistence yourself. Neovim may still reject an explicit existing destination before invoking the callback.
 
 | Context field | Meaning |
 | --- | --- |
@@ -191,19 +191,34 @@ The built-in writer requires the parent directory to exist. It stages output in 
 | `title` | Form title. |
 | `path` | Effective absolute local path, or `nil` if neither an explicit destination nor `path` was supplied. |
 | `force` | Boolean indicating whether the write command used `!`. |
+| `serialize()` | Return the configured output as a string, using the same newline rules as the built-in writer. No destination is required. |
+| `write()` | Write the serialized content to the effective path with the original overwrite flag. Return `true` on success; raise an error on failure or when no path is available. |
 
-For example, use your own persistence function or send validated data to another subsystem:
+For example, save JSON and copy exactly the same content to the system clipboard:
 
 ```lua
+format = 'json',
 on_submit = function(data, ctx)
-  if not ctx.path then
-    return false, 'Please specify an output path'
-  end
-  -- Your own synchronous persistence code goes here.
-  -- For ordinary file exports, omit on_submit and use format instead.
-  vim.print(data, ctx.path, ctx.force)
+  local content = ctx.serialize()
+  ctx.write()
+  vim.fn.setreg('+', content)
 end,
 ```
+
+To copy without creating a file, even when a destination was specified:
+
+```lua
+format = function(data, ctx)
+  return data.description
+end,
+on_submit = function(data, ctx)
+  vim.fn.setreg('+', ctx.serialize())
+end,
+```
+
+Call both helpers with no arguments, using dot notation. Serialization is lazy: the first successful call to either helper caches the string (including an empty string), and subsequent calls in the same submission reuse it. Each new submission starts with an empty cache. A failed serializer is not cached. `ctx.write()` uses the effective path and bang flag resolved for that submission, not later changes to `ctx.path` or `ctx.force`, and applies the same overwrite and filesystem checks as the built-in writer. It does not create parent directories. Repeated calls to `ctx.write()` perform separate writes, so a second call without `!` may fail.
+
+Both helpers are available only during the synchronous submission; do not retain them for later execution or call them recursively from a custom format function. The format function receives the same context and validated data. Without a custom callback, the built-in path uses the same helpers; without a path, a bare `:w` still validates only. For ordinary file exports, omit `on_submit` entirely.
 
 Returning `false, message` or throwing an error rejects the write. Any other normal return (including nil) means success. Callbacks and format functions must complete synchronously and must not change/delete the form buffer itself. If a callback has external side effects and subsequently fails, the plugin cannot roll them back.
 
@@ -225,7 +240,7 @@ make test
 # or: make test NVIM=/path/to/nvim
 ```
 
-The schema, serializer, and simulated-filesystem writer unit suites can also be run using standalone Lua. The integration suites require Neovim 0.12+ and exercise write events, failure/retry, callback context, actual files, output formats, overwrite protection, `:wq`, multiline range tracking, structural diagnostics, Undo/Redo, and independent submission after the snippet session ends.
+The schema, serializer, submission-context, and simulated-filesystem writer unit suites can also be run using standalone Lua. The integration suites require Neovim 0.12+ and exercise write events, failure/retry, callback context and lazy serialization, actual files, output formats, overwrite protection, `:wq`, multiline range tracking, structural diagnostics, Undo/Redo, and independent submission after the snippet session ends.
 
 ## Versions
 

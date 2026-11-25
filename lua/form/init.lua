@@ -91,6 +91,7 @@ function M.open(spec)
     end
 
     writing = true
+    local finish_context
     local ok, reason = pcall(function()
       -- <afile> preserves the filename spelling; <amatch> is only used as
       -- a fallback. A bare :w targets the virtual buffer name.
@@ -101,16 +102,18 @@ function M.open(spec)
       end
       local ctx = { bufnr = buf, title = title, path = path, force = force }
 
-      -- A custom submit callback takes full responsibility for persistence.
-      -- Without one, use the configured serializer and built-in file writer.
+      finish_context = output.attach_context(ctx, format, data, lines)
+
+      -- Custom callbacks opt in to serialization and persistence via ctx.
+      -- Without one, use the same helpers when a destination is available.
       if definition.on_submit then
         local accepted, message = definition.on_submit(data, ctx)
         if accepted == false then error(message or 'Submission rejected', 0) end
       elseif path then
-        local contents = output.serialize(format, data, ctx, lines)
-        output.write(path, contents, force)
+        ctx.write()
       end
     end)
+    if finish_context then finish_context() end
     writing = false
     if not ok then
       local text = 'Submission failed: ' .. tostring(reason)

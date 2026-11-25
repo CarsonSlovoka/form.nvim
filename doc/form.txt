@@ -109,18 +109,39 @@ rejected. See README.md for filesystem and permission details.
 
 Custom submission:                                               *form-submit*
 
-If on_submit is set, it replaces built-in serialization and persistence.
+If on_submit is set, no serialization or persistence happens automatically.
 The callback receives validated data and a context table:
 
     bufnr     form buffer number
     title     form title
     path      effective absolute local file path, or nil
     force     true if the write command used !
+    serialize()  return the configured serialized string, even without a path
+    write()      write that string to the resolved path; return true on success
+                 or raise an error (including a missing path)
 
-The custom serializer receives the same context. The callback owns all
-persistence and overwrite checks. Returning false, message or raising an
-error rejects submission. Other normal returns mean success. Both callback
-and serializer must be synchronous and must not modify/delete the form buffer.
+For example: >lua
+    format = 'json',
+    on_submit = function(data, ctx)
+      local content = ctx.serialize()
+      ctx.write()
+      vim.fn.setreg('+', content)
+    end,
+<
+Call the helpers without arguments. The first successful serialization is
+cached for the current submission, including an empty string. Failed
+serialization is not cached. Each new submission uses a fresh cache.
+ctx.write() preserves the resolved path, bang flag, and built-in overwrite
+checks. Repeated calls perform separate writes. Neither helper is invoked
+implicitly by a custom on_submit. Without a callback and with a destination,
+the default writer uses the same helpers.
+
+The custom serializer receives the same context. Do not call the helpers
+recursively from the format function or after the submission has ended.
+Returning false, message or raising an error rejects submission. Other
+normal returns mean success. Both callback and serializer must be synchronous
+and must not modify/delete the form buffer. External side effects cannot be
+rolled back if a callback subsequently fails.
 
 Successful submission clears diagnostics and resets 'modified'. Any failure
 raises a write error and retains 'modified'. :w! never bypasses validation.

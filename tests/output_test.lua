@@ -126,6 +126,73 @@ local ok, err = xpcall(function()
   assert(context.path == path('callback.txt') and context.force and not exists('callback.txt'))
   close(b)
 
+  -- Helpers opt in to the same serializer/writer and cache per submission.
+  local calls, callbacks, content = 0, 0, nil
+  local saved_ctx
+  b = open({ path = 'helper-default.txt', format = function(data, ctx)
+    calls = calls + 1
+    assert(ctx == saved_ctx)
+    return { ('X=%d'):format(data.x), 'note=' .. data.note }
+  end, on_submit = function(_, ctx)
+    callbacks = callbacks + 1
+    saved_ctx = ctx
+    local before = calls
+    content = ctx.serialize()
+    assert(calls == before + 1 and ctx.serialize() == content)
+    assert(ctx.write() and calls == before + 1)
+  end })
+  assert(calls == 0 and callbacks == 0)
+  set(b, -1, '')
+  expect_failure(b, 'w')
+  assert(calls == 0 and callbacks == 0 and not exists('helper-default.txt'))
+  set(b, 5, '台北')
+  expect_write('w helper-explicit.txt')
+  assert(calls == 1 and callbacks == 1 and not exists('helper-default.txt'))
+  assert(content == 'X=5\nnote=台北\n')
+  assert(vim.deep_equal(read('helper-explicit.txt'), { 'X=5', 'note=台北' }))
+  assert(not pcall(saved_ctx.serialize) and not pcall(saved_ctx.write))
+  set(b, 8, 'changed')
+  expect_write('w')
+  assert(calls == 2 and read('helper-default.txt')[1] == 'X=8')
+  set(b, 9, 'new')
+  expect_failure(b, 'w')
+  assert(calls == 3 and read('helper-default.txt')[1] == 'X=8')
+  assert(not pcall(saved_ctx.serialize) and not pcall(saved_ctx.write))
+  expect_write('w!')
+  assert(calls == 4 and read('helper-default.txt')[1] == 'X=9')
+  close(b)
+
+  -- The serializer works without a path; requesting a file write does not.
+  b = open({ format = 'json', on_submit = function(_, ctx)
+    content = ctx.serialize()
+  end })
+  expect_write('w')
+  assert(vim.deep_equal(vim.json.decode(content), { x = 5, note = '台北' }))
+  expect_write('w no-auto-write.json')
+  assert(not exists('no-auto-write.json'))
+  close(b)
+
+  b = open({ on_submit = function(_, ctx) return ctx.write() end })
+  expect_failure(b, 'w')
+  assert(#vim.diagnostic.get(b) == 1)
+  expect_write('w helper-raw.txt')
+  assert(vim.deep_equal(read('helper-raw.txt'), { 'x: 5', 'note: 台北' }))
+  close(b)
+
+  -- Format failures must not publish a destination, even with force.
+  b = open({ path = 'helper-default.txt', format = function() error('serializer failed') end,
+    on_submit = function(_, ctx) ctx.write() end })
+  expect_failure(b, 'w!')
+  assert(read('helper-default.txt')[1] == 'X=9')
+  expect_failure(b, 'w helper-broken.txt')
+  assert(not exists('helper-broken.txt'))
+  close(b)
+
+  -- No callback and no destination still validates without serializing.
+  b = open({ format = function() error('must not run without a destination') end })
+  expect_write('w')
+  close(b)
+
   -- A symlink must not cause the built-in writer to overwrite its target.
   if uv.fs_symlink(path('raw file.txt'), path('link.txt')) then
     b = open()

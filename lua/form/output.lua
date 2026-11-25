@@ -37,6 +37,40 @@ function M.serialize(format, data, ctx, lines)
   return count == 0 and '' or table.concat(value, '\n') .. '\n'
 end
 
+-- Helpers share a successful serialization for one synchronous submission.
+-- Capture the resolved destination and bang flag, not mutable context fields.
+function M.attach_context(ctx, format, data, lines)
+  local path, force = ctx.path, ctx.force
+  local active, serializing = true, false
+  local cached
+
+  local function check_active()
+    if not active then error('Submission context is no longer active', 0) end
+  end
+
+  local function serialize()
+    check_active()
+    if cached ~= nil then return cached end
+    if serializing then error('Recursive serialization is unsupported', 0) end
+    serializing = true
+    local ok, result = pcall(M.serialize, format, data, ctx, lines)
+    serializing = false
+    if not ok then error(result, 0) end
+    cached = result
+    return cached
+  end
+
+  ctx.serialize = serialize
+  ctx.write = function()
+    check_active()
+    if not path then error('Please specify an output path', 0) end
+    M.write(path, serialize(), force)
+    return true
+  end
+
+  return function() active = false end
+end
+
 -- Publish only after writing the entire output. A hard link provides exclusive
 -- creation without a check-then-overwrite race; rename implements forced replacement.
 -- Both operations use a temporary file in the destination directory.

@@ -81,9 +81,9 @@ end, {})
 | `fields` | 欄位定義，必須是非空且有順序的陣列 |
 | `window` | `split`（預設）、`vsplit` 或 `current` |
 | `path` | 選填的預設輸出路徑，在開啟表單時轉成絕對路徑；`:w filename` 可覆蓋當次路徑 |
-| `format` | `raw`（預設）、`json` 或自訂函數 `(data, ctx) -> string or string[]`，只有內建寫入功能取得路徑時才使用 |
+| `format` | `raw`（預設）、`json` 或自訂函數 `(data, ctx) -> string or string[]`，由內建寫入功能或 `ctx.serialize()`、`ctx.write()` 按需執行 |
 | `validate` | 選填的整份表單驗證函數 `(data) -> nil or { field_name = 'message' }` |
-| `on_submit` | 選填的同步提交函數 `(data, ctx)`，設定後取代內建寫入功能 |
+| `on_submit` | 選填的同步提交函數 `(data, ctx)`，設定後自行控制提交，可選擇沿用內建寫入功能 |
 | `mappings` | 是否設定 buffer-local 的 Tab 與 Shift-Tab 映射，預設為 `true` |
 | `diagnostic` | 自訂 `vim.diagnostic` 顯示選項，與預設值合併 |
 | `notify` | 是否顯示提交成功通知，預設為 `true` |
@@ -230,7 +230,7 @@ require('form').open({
 
 ### 自訂提交行為
 
-`on_submit(data, ctx)` 可用於特殊需求，例如呼叫 API、寫入資料庫或更新其他 buffer。設定後會完全取代內建的序列化與寫入功能，即使執行 `:w filename` 也是如此；自訂函數必須自行處理實際保存及覆蓋保護，Neovim 本身仍可能在呼叫 callback 前拒絕既有的指定檔案
+`on_submit(data, ctx)` 可用於特殊需求，例如呼叫 API、寫入資料庫或更新其他 buffer。設定後由 callback 自行控制提交，即使執行 `:w filename` 也不會自動格式化或寫入檔案；可透過 `ctx` 提供的方法沿用內建功能，也可以完全自行處理保存。Neovim 本身仍可能在呼叫 callback 前拒絕既有的指定檔案
 
 | `ctx` 屬性 | 說明 |
 | --- | --- |
@@ -238,19 +238,38 @@ require('form').open({
 | `title` | 表單標題 |
 | `path` | 本次有效的絕對路徑，若未指定檔名也沒有設定預設路徑則為 `nil` |
 | `force` | 布林值，代表此次指令是否包含 `!` |
+| `serialize()` | 依照 `format` 回傳格式化後的字串，換行規則與內建寫入功能相同，不需要指定輸出路徑 |
+| `write()` | 將格式化結果寫入本次有效路徑，沿用原本的覆蓋保護；成功回傳 `true`，失敗或沒有輸出路徑則拋出錯誤 |
 
-例如，將資料交給自己的保存邏輯：
+例如，將 JSON 寫入檔案，並將完全相同的內容複製到系統剪貼簿：
 
 ```lua
+format = 'json',
 on_submit = function(data, ctx)
-  if not ctx.path then
-    return false, '請指定輸出路徑'
-  end
-  -- 在這裡加入自己的同步保存邏輯
-  -- 若只是寫入一般檔案，建議改用 format 並省略 on_submit
-  vim.print(data, ctx.path, ctx.force)
+  local content = ctx.serialize()
+  ctx.write()
+  vim.fn.setreg('+', content)
 end,
 ```
+
+若只需要將自訂格式的內容複製到剪貼簿，不想建立檔案（即使有指定路徑）：
+
+```lua
+format = function(data, ctx)
+  return data.description
+end,
+on_submit = function(data, ctx)
+  vim.fn.setreg('+', ctx.serialize())
+end,
+```
+
+兩個方法都不需要傳入參數，使用 `.` 呼叫即可
+
+格式化採用延遲求值（lazy evaluation），第一次成功呼叫任一方法時才執行序列化，並快取結果（包含空字串）；同一次提交中重複呼叫會沿用該結果，每次新的提交則重新計算。若序列化失敗，不會快取錯誤
+
+`ctx.write()` 使用本次提交已解析的路徑及 `!` 狀態，不受後續修改 `ctx.path` 或 `ctx.force` 的影響，並沿用內建的覆蓋保護與檔案寫入規則，不會自動建立父目錄。重複呼叫 `ctx.write()` 會各自執行寫入，因此未使用 `!` 時，第二次寫入可能失敗
+
+這兩個方法僅在本次同步提交期間有效，不應保留至稍後執行，也不能從自訂 `format` 函數中遞迴呼叫。自訂格式函數會收到相同的 context 與已驗證的資料。未設定 `on_submit` 時，內建寫入也使用相同機制；若沒有輸出路徑，單獨執行 `:w` 仍只進行驗證。若只是一般檔案輸出，可直接省略 `on_submit`
 
 回傳 `false, message` 或拋出 `error()` 代表提交失敗，其他正常回傳值（包含 `nil`）代表提交成功
 
@@ -276,7 +295,7 @@ make test
 make test NVIM=/path/to/nvim
 ```
 
-Schema、序列化及模擬檔案系統的寫入單元測試，也可以使用獨立的 Lua 執行；整合測試需要 Neovim 0.12 以上版本，涵蓋寫入事件、驗證失敗重試、callback context、實體檔案、輸出格式、覆蓋保護、`:wq` 行為、多行範圍追蹤、結構 Diagnostic、Undo/Redo，以及 snippet 結束後的獨立提交
+Schema、序列化、提交 context 及模擬檔案系統的寫入單元測試，也可以使用獨立的 Lua 執行；整合測試需要 Neovim 0.12 以上版本，涵蓋寫入事件、驗證失敗重試、callback context 與延遲序列化、實體檔案、輸出格式、覆蓋保護、`:wq` 行為、多行範圍追蹤、結構 Diagnostic、Undo/Redo，以及 snippet 結束後的獨立提交
 
 ## 版本管理
 
